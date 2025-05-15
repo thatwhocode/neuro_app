@@ -6,3 +6,4 @@ torch>=1.11.0,<2.4.0
 pydantic
 srsly
 python-multipart
+matplotlib
