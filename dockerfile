@@ -1,0 +1,57 @@
+# Використовуємо офіційний Python 3.9 slim образ - це вже включає Python та pip
+FROM python:3.9-slim
+
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+# Встановлення часової зони
+# У slim образах потрібно встановлювати пакет tzdata через apt
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata && \
+    ln -sf /usr/share/zoneinfo/Europe/Kiev /etc/localtime && \
+    dpkg-reconfigure -f noninteractive tzdata && \
+    rm -rf /var/lib/apt/lists/* # Очистка кешу apt
+
+# Встановлення робочої директорії всередині контейнера
+WORKDIR /app
+
+# Встановлення системних залежностей, які можуть знадобитися для компіляції деяких Python пакетів
+# build-essential, cmake, libopenblas-dev, liblapack-dev часто потрібні для компіляції наукових бібліотек як blis/thinc
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake \
+    libopenblas-dev liblapack-dev \
+    # Додайте інші системні залежності, якщо потрібні вашим Python пакетам (наприклад, залежності для конкретного бекенда torch)
+    && rm -rf /var/lib/apt/lists/* # Очистка кешу apt
+
+
+# Оновлення pip до останньої версії (хороша практика, хоча в офіційних образах він зазвичай досить свіжий)
+RUN pip install --upgrade pip
+
+# Очистка кешу pip перед встановленням залежностей для чистої збірки
+RUN pip cache purge
+
+# Копіюємо файл з Python залежностями (requirements.txt)
+# Переконайтесь, що requirements.txt відповідає вашим потребам на Python 3.9
+COPY requirements.txt .
+
+# Встановлюємо Python залежності з requirements.txt
+# На Python 3.9, pip зможе знайти та встановити сумісні версії numpy та інших залежностей
+RUN pip install --no-cache-dir -r requirements.txt
+
+
+# Копіюємо навчену модель SpaCy до робочої директорії контейнера
+# Переконайтесь, що папка 'model-best' знаходиться поруч з Dockerfile
+COPY model-best /app/model-best
+
+# Копіюємо ваш додаток FastAPI та інші необхідні файли проєкту
+COPY . /app
+
+# Встановлюємо змінну середовища, яка вказує шлях до моделі для вашого додатку
+ENV MODEL_PATH=/app/model-best
+
+# Вказуємо порт, який буде слухати додаток
+EXPOSE 8000
+
+# Команда для запуску додатка при старті контейнера
+# Додаток main.py використовує змінну середовища MODEL_PATH, встановлену вище
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
