@@ -1,0 +1,9 @@
+fastapi==0.109.0
+uvicorn==0.27.1
+spacy ==3.8.5
+spacy-transformers
+torch>=1.11.0,<2.4.0
+pydantic
+srsly
+python-multipart
+matplotlib
