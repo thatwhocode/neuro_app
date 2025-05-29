@@ -1,19 +1,18 @@
 from fastapi import FastAPI, HTTPException, Request, status
 from typing import List, Tuple
+from contextlib import asynccontextmanager
+from datetime import datetime
+from fastapi.responses import JSONResponse, StreamingResponse 
+import time 
+from spacy.matcher import Matcher
 import spacy
 import json as js 
 import logging
 import os
-from contextlib import asynccontextmanager
-from datetime import datetime, date 
-from fastapi.responses import JSONResponse, StreamingResponse 
-import time 
-from pathlib import Path 
-# --- Імпорти для графіків ---
 import matplotlib.pyplot as plt
 import io
 
-from pyd_models import FabulaInput, FabulaOutput, FabulaBatchOutputItem, FabulaBatchInput, FabulaBatchOutput
+from pyd_models import FabulaInput, FabulaOutput, FabulaBatchOutputItem, FabulaBatchInput, FabulaBatchOutput, WeaponSerialNumber
 from stats import StatsManager
 # --- Налаштування логування ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,15 +23,45 @@ MODEL_PATH  = os.getenv("MODEL_PATH", ".app/model-best")
 STATS_FILE = "api_processing_stats.json" 
 
 
+NUMERIC_CALIBER_PART_REGEX = r"(?:\d{1,2}(?:[.,]\d{1,3})?|\.\d{2,3}|(?:4|8|10|12|16|20|24|28|32|36))"
+SECOND_NUM_PART_REGEX = r"\d{2,3}[A-Za-zА-Яа-я]?"
 
+SERIAL_TOKEN_REGEX = r"^[A-Za-zА-Яа-яЇїІіЄєҐґ0-9](?:[A-Za-zА-Яа-яЇїІіЄєҐґ0-9./-]{0,23}[A-Za-zА-Яа-яЇїІіЄєҐґ0-9])?$|^[A-Za-zА-Яа-яЇїІіЄєҐґ0-9]{2,25}$"
+SERIAL_PREFIX_REGEX = r"^[A-Za-zА-Яа-яЇїІіЄєҐґ]{2,7}$"
+SERIAL_SUFFIX_REGEX = r"^(?=[A-Za-zА-Яа-яЇїІіЄєҐґ0-9./-]*[0-9])[A-Za-zА-Яа-яЇїІіЄєҐґ0-9./-]{2,20}$|^[0-9./-]{2,20}$"
+
+
+sn_token_single_def = {"TEXT": {"REGEX": SERIAL_TOKEN_REGEX}}
+sn_token_prefix_def = {"TEXT": {"REGEX": SERIAL_PREFIX_REGEX}}
+sn_token_suffix_def = {"TEXT": {"REGEX": SERIAL_SUFFIX_REGEX}}
+
+markers_text_lower = ["номер", "ном", "н", "маркування"]
+markers_symbols = ["№", "#"]
+weapon_number_patterns_config = []
+
+for marker_sym in markers_symbols:
+    weapon_number_patterns_config.append([{"TEXT": marker_sym}, {"TEXT": ":", "OP": "?"}, sn_token_single_def])
+    weapon_number_patterns_config.append([{"TEXT": marker_sym}, sn_token_single_def])
+    weapon_number_patterns_config.append([{"TEXT": marker_sym}, {"TEXT": ":", "OP": "?"}, sn_token_prefix_def, sn_token_suffix_def])
+    weapon_number_patterns_config.append([{"TEXT": marker_sym}, sn_token_prefix_def, sn_token_suffix_def])
+
+for marker_txt in markers_text_lower:
+    weapon_number_patterns_config.append([{"LOWER": marker_txt}, {"TEXT": {"IN": [":", "."]}, "OP": "?"}, sn_token_single_def])
+    weapon_number_patterns_config.append([{"LOWER": marker_txt}, sn_token_single_def])
+    weapon_number_patterns_config.append([{"LOWER": marker_txt}, {"TEXT": {"IN": [":", "."]}, "OP": "?"}, sn_token_prefix_def, sn_token_suffix_def])
+    weapon_number_patterns_config.append([{"LOWER": marker_txt}, sn_token_prefix_def, sn_token_suffix_def])
+    if marker_txt in ["ном", "н"]:
+        weapon_number_patterns_config.append([{"LOWER": marker_txt}, {"TEXT": "."}, sn_token_single_def])
+        weapon_number_patterns_config.append([{"LOWER": marker_txt}, {"TEXT": "."}, sn_token_prefix_def, sn_token_suffix_def])
 nlp: spacy.language.Language = None
+matcher = None
 stats_manager: StatsManager = None 
 
 
 # --- Lifespan Event Handlers ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global nlp, stats_manager
+    global nlp, stats_manager, matcher
     logger.info("Додаток FastAPI запускається...")
 
     # 1. Ініціалізація StatsManager (він сам завантажить статистику з файлу)
@@ -49,6 +78,16 @@ async def lifespan(app: FastAPI):
         logger.info(f"Спроба завантажити модель Spacy з : {MODEL_PATH} ")
         nlp = spacy.load(MODEL_PATH)
         logger.info("Модель SpaCy успішно завантажена.")
+        matcher = Matcher(nlp.vocab)
+        if not weapon_number_patterns_config:
+            logger.warning("Патерни для пошуку номерів зброї не визначені! Matcher буде порожнім.")
+        else:
+            for i, pattern_group in enumerate(weapon_number_patterns_config):
+                try:
+                    matcher.add(f"WEAPON_NUMBER_PATTERN_{i}", [pattern_group])
+                except Exception as e:
+                    logger.error(f"Не вдалося додати патерн номеру зброї {i}: {pattern_group}. Помилка: {e}")
+            logger.info(f"Matcher ініціалізовано з {len(matcher)} патернами номерів зброї.")
     except OSError:
         logger.exception(f"Не вдалося завантажити модель Spacy з {MODEL_PATH}. Переконайтеся, що модель існує за цим шляхом.")
         raise RuntimeError(f"Не вдалося завантажити модель Spacy з {MODEL_PATH}") 
@@ -57,7 +96,7 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"Невідома помилка при завантажені моделі Spacy : {e}")
 
 
-    yield # Додаток готовий приймати запити
+    yield 
 
     # --- Логіка завершення роботи (shutdown) ---
     logger.info("Додаток FastAPI завершує роботу. Вивільнення ресурсів...")
@@ -117,9 +156,14 @@ async def health_check():
 
 @app.post("/analyze_fabula", response_model=FabulaOutput, summary="Analyze fabula text for weapon entities")
 async def analyze_fabula(input_data: FabulaInput):
+    global nlp, matcher
     if nlp is None:
         logger.error("'/analyze_fabula' called before model was loaded.")
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Модель SpaCy ще не завантажена або недоступна. Спробуйте пізніше.")
+    if matcher is None: # Додаткова перевірка для matcher
+        logger.error("'/analyze_fabula' викликано до ініціалізації Matcher.")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Matcher для номерів зброї не ініціалізовано.")
+
     
     # Перевіряємо, чи менеджер статистики ініціалізований перед обробкою
     # Якщо він не критичний для роботи ендпоінта, можна просто залогувати і продовжити
@@ -131,14 +175,114 @@ async def analyze_fabula(input_data: FabulaInput):
     fabula = input_data.fabula
     results = FabulaOutput()
     processing_duration = 0.0
+    CONTEXT_WINDOW_SIZE = 25
 
     try:
         start_time = time.time()
         doc = nlp(fabula) 
+        results.entities = [(ent.text, ent.label_) for ent in doc.ents]
+        
+        # Список для зберігання ВСІХ знайдених відповідностей для ВСІХ сутностей,
+        # ПІСЛЯ фільтрації на "найповніший" для кожного контекстного вікна
+        all_final_serial_number_matches: List[WeaponSerialNumber] = []
+
+        for ent in doc.ents: # Зовнішній цикл по сутностях
+            window_start_token_idx = max(0, ent.start - CONTEXT_WINDOW_SIZE)
+            window_end_token_idx = min(len(doc), ent.end + CONTEXT_WINDOW_SIZE)
+            context_span = doc[window_start_token_idx:window_end_token_idx]
+            
+            matches_in_context_raw = matcher(context_span) # Отримуємо "сирі" збіги
+            
+            # Список для зберігання кандидатів на серійні номери для ПОТОЧНОГО context_span
+            candidate_matches_for_current_span = []
+
+            for match_id_hash, start_token_in_span, end_token_in_span in matches_in_context_raw:
+                matched_segment = context_span[start_token_in_span:end_token_in_span]
+                original_segment_start_char  = context_span[start_token_in_span].idx
+                original_segment_end_char = context_span[end_token_in_span - 1].idx + len(context_span[end_token_in_span - 1].text)
+                
+                extracted_serial = ""
+                try:
+                    pattern_key_str = nlp.vocab.strings[match_id_hash]
+                    pattern_index  = int(pattern_key_str.split("_")[-1])
+                    matched_pattern_structure =  weapon_number_patterns_config[pattern_index]
+                    num_serial_tokens = 0
+                    for token_pattern_dict in reversed(matched_pattern_structure):
+                        if "TEXT" in token_pattern_dict and isinstance(token_pattern_dict["TEXT"], dict) and "REGEX" in token_pattern_dict["TEXT"]:
+                            num_serial_tokens +=1
+                        elif not("TEXT" in token_pattern_dict and isinstance(token_pattern_dict["TEXT"], dict) and "REGEX" in token_pattern_dict["TEXT"]):
+                            if num_serial_tokens > 0:
+                                break
+                    if num_serial_tokens > 0 and len(matched_segment) >= num_serial_tokens:
+                        serial_tokens_span = matched_segment[-num_serial_tokens:]
+                        extracted_serial = serial_tokens_span.text
+                    else:
+                        extracted_serial = matched_segment.text
+                except Exception as e_extraction:
+                    logger.warning(f"Помилка виділення серійного номера з '{matched_segment.text}': {e_extraction}")
+                    extracted_serial = matched_segment.text
+                
+                candidate_matches_for_current_span.append({
+                    'full_matched_text': matched_segment.text,
+                    'original_segment_start_char': original_segment_start_char,
+                    'original_segment_end_char': original_segment_end_char,
+                    'extracted_serial': extracted_serial
+                })
+
+            # Якщо для поточного context_span не знайдено кандидатів, переходимо до наступної сутності
+            if not candidate_matches_for_current_span:
+                continue
+
+            # Сортуємо кандидатів:
+            # 1. За початковим символом (зростання)
+            # 2. За довжиною збігу (спадання, тобто довші перші для однакового початку)
+            candidate_matches_for_current_span.sort(
+                key=lambda m: (m['original_segment_start_char'], -(m['original_segment_end_char'] - m['original_segment_start_char']))
+            )
+
+            # Фільтруємо, щоб залишити "найповніші"
+            selected_matches_for_this_span = []
+            if candidate_matches_for_current_span:
+                # Завжди додаємо перший кандидат (він найдовший для своєї початкової позиції)
+                selected_matches_for_this_span.append(candidate_matches_for_current_span[0])
+
+                for current_candidate_data in candidate_matches_for_current_span[1:]:
+                    last_added_match_data = selected_matches_for_this_span[-1]
+
+                    # Сценарій 1: Поточний кандидат починається там же, де й останній доданий.
+                    # Оскільки сортували за довжиною (спадання), поточний буде коротшим або таким самим. Ігноруємо.
+                    if current_candidate_data['original_segment_start_char'] == last_added_match_data['original_segment_start_char']:
+                        continue
+
+                    # Сценарій 2: Поточний кандидат починається ПІСЛЯ того, як останній доданий закінчився (немає перекриття).
+                    # Це новий, окремий потенційний номер. Додаємо його.
+                    if current_candidate_data['original_segment_start_char'] >= last_added_match_data['original_segment_end_char']:
+                        selected_matches_for_this_span.append(current_candidate_data)
+                        continue
+                    
+                    # Сценарій 3: Поточний кандидат перекривається з останнім доданим, але починається пізніше.
+                    # (current_candidate_data['original_segment_start_char'] < last_added_match_data['original_segment_end_char'] та
+                    #  current_candidate_data['original_segment_start_char'] > last_added_match_data['original_segment_start_char'])
+                    # Якщо поточний кандидат повністю міститься в останньому доданому (тобто закінчується не пізніше), ігноруємо.
+                    if current_candidate_data['original_segment_end_char'] <= last_added_match_data['original_segment_end_char']:
+                        continue
+            for final_match_data in selected_matches_for_this_span:
+                serial_number_match = WeaponSerialNumber(
+                    entity_text= ent.text,
+                    entity_label= ent.label_,
+                    entity_start_ch= ent.start_char,
+                    entity_end_ch= ent.end_char,
+                    matched_weapon_segment_text=final_match_data['full_matched_text'],
+                    matched_segment_start_char= final_match_data['original_segment_start_char'],
+                    matched_segment_end_char=final_match_data['original_segment_end_char'],
+                    serial_number=final_match_data['extracted_serial']
+                )
+                all_final_serial_number_matches.append(serial_number_match)
+        
+        # Присвоєння фінального списку результатам
+        results.weapon_serial_numbers = all_final_serial_number_matches
         end_time = time.time()
         processing_duration = end_time - start_time
-
-        results.entities = [(ent.text, ent.label_) for ent in doc.ents]
 
         # --- Оновлюємо статистику (тільки якщо stats_manager ініціалізовано) ---
         if stats_manager: 
