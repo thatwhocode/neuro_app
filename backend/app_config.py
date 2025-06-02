@@ -1,5 +1,3 @@
-
-from pathlib import Path
 import os 
 
 
@@ -11,12 +9,15 @@ STATS_FILE = "api_processing_stats.json"
 SERIAL_TOKEN_REGEX = r"^[A-Za-zА-Яа-яЇїІіЄєҐґ0-9](?:[A-Za-zА-Яа-яЇїІіЄєҐґ0-9./-]{0,23}[A-Za-zА-Яа-яЇїІіЄєҐґ0-9])?$|^[A-Za-zА-Яа-яЇїІіЄєҐґ0-9]{2,25}$"
 SERIAL_PREFIX_REGEX = r"^[A-Za-zА-Яа-яЇїІіЄєҐґ]{2,7}$"
 SERIAL_SUFFIX_REGEX = r"^(?=[A-Za-zА-Яа-яЇїІіЄєҐґ0-9./-]*[0-9])[A-Za-zА-Яа-яЇїІіЄєҐґ0-9./-]{2,20}$|^[0-9./-]{2,20}$"
+SINGLE_LETTER_SERIAL_PREFIX_REGEX = r"^[A-Za-zА-Яа-яЇїІіЄєҐґ]$"
 
+sn_token_single_letter_prefix_def = {"TEXT": {"REGEX": SINGLE_LETTER_SERIAL_PREFIX_REGEX}}
 sn_token_single_def = {"TEXT": {"REGEX": SERIAL_TOKEN_REGEX}}
 sn_token_prefix_def = {"TEXT": {"REGEX": SERIAL_PREFIX_REGEX}}
 sn_token_suffix_def = {"TEXT": {"REGEX": SERIAL_SUFFIX_REGEX}}
 
-
+markers_text_lower_sn = ["номер", "ном", "н", "маркування"]
+markers_symbols_sn = ["№", "#"] 
 
 # --- Регулярні вирази та визначення для КАЛІБРІВ ---
 NUMERIC_CALIBER_PART_REGEX = r"(?:\d{1,2}(?:[.,]\d{1,3})?|\.\d{2,3}|(?:4|8|10|12|16|20|24|28|32|36))"
@@ -41,9 +42,5 @@ K_NUMXNUM_MM_SINGLE_TOKEN_REGEX = r"^[кК][.-]?" + NUMERIC_CALIBER_PART_REGEX +
 NUM_KALIBRU_SINGLE_TOKEN_REGEX = r"^" + NUMERIC_CALIBER_PART_REGEX + r"[Кк][Аа][Лл][Іі][Бб][Рр][Уу]$"
 NUMXNUM_KALIBRU_SINGLE_TOKEN_REGEX = r"^" + NUMERIC_CALIBER_PART_REGEX + r"[xхXХ×]" + SECOND_NUM_PART_REGEX + r"[Кк][Аа][Лл][Іі][Бб][Рр][Уу]$"
 
-
-weapon_number_patterns_config = []
-markers_text_lower_sn = ["номер", "ном", "н", "маркування"]
-markers_symbols_sn = ["№", "#"] 
 
 CONTEXT_WINDOW_SIZE = 25 

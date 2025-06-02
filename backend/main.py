@@ -2,11 +2,11 @@ from fastapi import FastAPI, HTTPException, Request, status
 from typing import List, Tuple, Optional, Any 
 from contextlib import asynccontextmanager
 from datetime import datetime
-from fastapi.responses import JSONResponse, StreamingResponse 
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 import time 
 from spacy.matcher import Matcher
 import spacy
-import re # Переконайтеся, що re імпортовано
+import re 
 
 import logging
 import os
@@ -23,8 +23,8 @@ from app_config import(
     SERIAL_TOKEN_REGEX, SERIAL_PREFIX_REGEX, SERIAL_SUFFIX_REGEX,
     NUMERIC_CALIBER_PART_REGEX, SECOND_NUM_PART_REGEX
     )
-from app_config import(sn_token_single_def, sn_token_prefix_def, sn_token_suffix_def)
-from app_paterns import weapon_number_patterns_config, caliber_patterns_config
+from app_config import(sn_token_single_def, sn_token_prefix_def, sn_token_suffix_def, sn_token_single_letter_prefix_def)
+from app_patterns import weapon_number_patterns_config, caliber_patterns_config
 from stats import StatsManager 
 
 # --- Налаштування логування ---
@@ -190,26 +190,42 @@ async def analyze_fabula(input_data: FabulaInput):
                 extracted_serial = ""
                 try:
                     pattern_key_str = nlp.vocab.strings[match_id_hash]
-                    pattern_index  = int(pattern_key_str.split("_")[-1]) 
-                    matched_pattern_structure =  weapon_number_patterns_config[pattern_index]
+                    pattern_index  = int(pattern_key_str.split("_")[-1]) # WEAPON_NUMBER_PATTERN_i
+                    # matched_pattern_structure - це список словників-визначень токенів з weapon_number_patterns_config
+                    matched_pattern_structure = weapon_number_patterns_config[pattern_index] 
+                    
                     num_serial_tokens = 0
-                    # Евристика для виділення чистого номера: рахуємо токени з REGEX з кінця патерна
-                    for token_pattern_dict in reversed(matched_pattern_structure):
-                        # Перевіряємо, чи REGEX цього токена - один з тих, що визначають частини серійного номера
-                        # Це припускає, що sn_token_single_def і т.д. використовуються безпосередньо в weapon_number_patterns_config
-                        # і їхні словники містять саме ці рядки REGEX.
-                        if  token_pattern_dict == sn_token_single_def or \
-                            token_pattern_dict == sn_token_prefix_def or \
-                            token_pattern_dict == sn_token_suffix_def:
-                            num_serial_tokens +=1
-                        # Якщо це не частина номера (наприклад, маркер або роздільник), зупиняємось
-                        elif not (token_pattern_dict.get("TEXT", {}).get("REGEX") in [SERIAL_TOKEN_REGEX, SERIAL_PREFIX_REGEX, SERIAL_SUFFIX_REGEX]):
-                            if num_serial_tokens > 0: break 
+                    # Ітеруємо по визначеннях токенів у патерні, починаючи з кінця
+                    for token_p_def in reversed(matched_pattern_structure):
+                        # Перевіряємо, чи поточне визначення токена є одним з відомих визначень для частин серійного номера
+                        is_serial_value_token = False
+                        if token_p_def == sn_token_single_def or \
+                            token_p_def == sn_token_prefix_def or \
+                                token_p_def == sn_token_single_def or \
+                                    token_p_def == sn_token_suffix_def:
+                                    
+                                    is_serial_value_token = True
+                        
+                        if is_serial_value_token:
+                            num_serial_tokens += 1
+                        else: 
+                            # Якщо це не токен значення (тобто маркер або роздільник)
+                            # і ми вже почали рахувати токени номера (num_serial_tokens > 0),
+                            # це означає, що ми пройшли всі частини номера і дійшли до маркера.
+                            if num_serial_tokens > 0:
+                                break # Зупиняємо підрахунок
+                            # Якщо num_serial_tokens == 0, ми все ще в маркерах/роздільниках наприкінці патерну (малоймовірно для номерів)
+                            # або патерн складається лише з маркерів (також малоймовірно для успішного збігу номера).
                     
                     if num_serial_tokens > 0 and len(matched_segment) >= num_serial_tokens:
-                        serial_tokens_span = matched_segment[-num_serial_tokens:]
+                        # Виділяємо останні num_serial_tokens з фактично знайденого сегмента
+                        start_slice_index = len(matched_segment) - num_serial_tokens
+                        serial_tokens_span = matched_segment[start_slice_index:]
                         extracted_serial = serial_tokens_span.text
-                    else: 
+                    else:
+                        # Якщо логіка не змогла ідентифікувати спеціальні токени номера,
+                        # або якщо знайдений сегмент коротший (що дивно для успішного збігу),
+                        # повертаємо весь текст збігу як запасний варіант.
                         extracted_serial = matched_segment.text
                 except Exception as e_extraction:
                     logger.warning(f"Помилка виділення серійного номера з '{matched_segment.text}': {e_extraction}", exc_info=True)
@@ -350,10 +366,14 @@ async def analyze_fabula(input_data: FabulaInput):
     except Exception as e:
         logger.error(f"Помилка обробки тексту в '/analyze_fabula': '{fabula[:100]}...'. Виняток: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Помилка обробки тексту: {e}")
-    
-    return results
+    if results:
+            if results.weapon_serial_numbers or results.weapon_calibers:
+             return results
+            else:
+             logger.info("Жодної зброї з деталізованими характеристиками не знайдено.")
+             return  Response(status_code=status.HTTP_204_NO_CONTENT)  
 
-# --- Ендпоінт для пакетної обробки ---
+
 @app.post("/analyze_fabulas_batch", response_model=FabulaBatchOutput, summary="Analyze a batch of fabulas")
 async def analyze_fabulas_batch(batch_input: FabulaBatchInput):
     if nlp is None: 
@@ -364,37 +384,24 @@ async def analyze_fabulas_batch(batch_input: FabulaBatchInput):
     processed_ctr: int = 0
     failed_ctr: int  = 0
     
-    for fabula_item_input in batch_input.fabulas: # Змінено ім'я змінної для ясності
-        # Для кожного елемента батча ми можемо викликати логіку, схожу на /analyze_fabula,
-        # але потрібно адаптувати вхід/вихід або створити допоміжну функцію.
-        # Зараз просто імітуємо отримання сутностей, як у вашому коді.
-        # В РЕАЛЬНОСТІ ТУТ МАЄ БУТИ ПОВНА ЛОГІКА АНАЛІЗУ ЯК В /analyze_fabula
+    for fabula_item_input in batch_input.fabulas:
+
         
-        fabula_text = fabula_item_input.fabula # Отримуємо текст з FabulaInput
+        fabula_text = fabula_item_input.fabula 
         doc_batch = nlp(fabula_text)
         entities_for_item = [(ent.text, ent.label_) for ent in doc_batch.ents]
-        
-        # ТУТ ПОТРІБНО ДОДАТИ ЛОГІКУ ДЛЯ SN ТА CALIBER, ЯК В /analyze_fabula
-        # і заповнити відповідні поля в FabulaBatchOutputItem (серійні номери, калібри)
-        # Наприклад:
-        # weapon_serials_for_item = process_serial_numbers(doc_batch, serial_number_matcher, ...)
-        # weapon_calibers_for_item = process_calibers(doc_batch, caliber_matcher, ...)
 
         batch_results_final.append(FabulaBatchOutputItem(
             entities=entities_for_item
-            # weapon_serial_numbers=weapon_serials_for_item, # Має бути додано
-            # weapon_calibers=weapon_calibers_for_item      # Має бути додано
         ))
         processed_ctr += 1
-        # Обробка помилок для окремого елемента батча тут не реалізована,
-        # але її можна додати, збільшуючи failed_ctr
+
         
     logger.info(f"Завершено обробку батчу: успішно {processed_ctr}, помилок {failed_ctr}")
-    # failed_ctr тут завжди буде 0, якщо немає індивідуальної обробки помилок
     return FabulaBatchOutput(results=batch_results_final, processed_ctr=processed_ctr, failed_ctr=failed_ctr)
 
 
-# --- Endpoint'и для статистики (залишаються без змін) ---
+
 @app.get("/stat", summary="Get processing statistics (JSON)")
 async def get_processing_statistics_json():
     if stats_manager is None: 
