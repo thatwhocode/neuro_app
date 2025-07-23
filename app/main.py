@@ -1,9 +1,10 @@
 from fastapi import FastAPI
 from transformers import AutoTokenizer, AutoModelForTokenClassification
 import torch
-from models import  TextInput, Entity, NEROutput
+from .py_models.models import  TextInput, Entity, NEROutput
+import uvicorn
 
-MODEL_PATH = "./final_ner_model" # Переконайтеся, що це правильний шлях!
+MODEL_PATH = "app/final_ner_model" # Переконайтеся, що це правильний шлях!
 
 # --- 1. Завантаження моделі та токенізатора (виконується один раз при запуску додатку) ---
 try:
@@ -160,3 +161,7 @@ async def get_ner_entities(input_data: TextInput):
     entities = predict_ner(input_data.text)
     return NEROutput(entities=entities)
 
+
+
+if __name__ == "main":
+    uvicorn.run("main:app", host ="0.0.0.0", port=5000, log_level="info")

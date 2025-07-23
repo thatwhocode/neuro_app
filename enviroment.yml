@@ -1,0 +1,16 @@
+name: hugging_face_fast_api_project
+channels:
+  - conda-forge
+  - defaults
+dependencies: 
+  - python=3.12
+  - pip
+  - uvicorn
+  - transformers
+  - pydantic
+  - pip:
+      - fastapi
+      - torch
+      - huggingface-hub
+      - tokenizers
+      - safetensors
