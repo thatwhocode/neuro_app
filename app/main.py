@@ -3,7 +3,9 @@ from transformers import AutoTokenizer, AutoModelForTokenClassification
 import torch
 from .py_models.models import  TextInput, Entity, NEROutput
 import uvicorn
-
+from starlette.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
+from fastapi.openapi.docs import get_swagger_ui_html
 MODEL_PATH = "app/final_ner_model" # Переконайтеся, що це правильний шлях!
 
 # --- 1. Завантаження моделі та токенізатора (виконується один раз при запуску додатку) ---
@@ -23,10 +25,13 @@ except Exception as e:
 
 # --- 2. Ініціалізація FastAPI додатку ---
 app = FastAPI(
+    docs_url=None,
+    redoc_url= None,
     title="NER Model API",
     description="API для розпізнавання іменованих сутностей (NER) за допомогою тонко налаштованої моделі.",
     version="1.0.0",
 )
+app.mount("/static/", StaticFiles(directory="app/static/swagger-ui"), name="static_swagger_ui_files")
 
 # --- 4. Функція для передбачення NER ---
 def predict_ner(text: str):
@@ -162,6 +167,16 @@ async def get_ner_entities(input_data: TextInput):
     return NEROutput(entities=entities)
 
 
+@app.get("/docs", response_class=HTMLResponse)
+async def serve_local_files_ui():
+    index_html_path = "app/static/swagger-ui/index.html"
+    try: 
+        with open(index_html_path, "r", encoding='utf-8') as f:
+            html_content= f.read()
+            return HTMLResponse(content=html_content)
+    except FileNotFoundError:
+        return HTMLResponse(content="<h1> Swagger UI file index.html not found!</h1>", status_code= 404)
+    
 
 if __name__ == "main":
     uvicorn.run("main:app", host ="0.0.0.0", port=5000, log_level="info")
