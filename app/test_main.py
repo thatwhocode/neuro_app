@@ -12,3 +12,8 @@ def test_ner_aviability():
 def test_ner_bad_params():
     response = client.post("/ner/", json={"":""})
     assert response.status_code == 422
+
+def test_docs_locally():
+    response = client.get("/docs")
+    assert response.status_code == 200
+    
