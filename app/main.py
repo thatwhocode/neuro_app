@@ -52,6 +52,3 @@ async def serve_local_files_ui():
     except FileNotFoundError:
         return HTMLResponse(content="<h1> Swagger UI file index.html not found!</h1>", status_code= 404)
     
-
-if __name__ == "main":
-    uvicorn.run("main:app", host ="0.0.0.0", port=5000, log_level="info")

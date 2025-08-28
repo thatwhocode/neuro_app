@@ -5,5 +5,5 @@ __pycache__/
 .Python
 build/
 ner_model/
-calssification_model/
+classification_model/
 .vscode/
