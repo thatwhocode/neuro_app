@@ -4,6 +4,6 @@ __pycache__/
 
 .Python
 build/
-final_ner_model/
-
+ner_model/
+calssification_model/
 .vscode/
