@@ -1,6 +1,6 @@
 from fastapi import FastAPI
-from transformers import AutoTokenizer, AutoModelForTokenClassification
-from typing import List, Dict
+from transformers import AutoTokenizer, AutoModelForTokenClassification, AutoModelForSequenceClassification
+from typing import List, Dict, Union
 
 from transformers.pipelines import pipeline
 import torch
@@ -9,15 +9,41 @@ import uvicorn
 from starlette.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.openapi.docs import get_swagger_ui_html
-MODEL_PATH = "app/final_ner_model/" 
+
+NER_MODEL_PATH = "app/ner_model/" 
+CLASSIFICATION_MODEL_PATH = "app/classification_model/"
+
+
 try:
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only = True)
-    model = AutoModelForTokenClassification.from_pretrained(MODEL_PATH, local_files_only = True)
-    ner_pipeline = pipeline("token-classification", model= model, tokenizer=tokenizer, aggregation_strategy="simple", device=0 if torch.cuda.is_available() else  -1)
+    ner_tokenizer = AutoTokenizer.from_pretrained(NER_MODEL_PATH,
+                                                  local_files_only = True)
+    ner_model = AutoModelForTokenClassification.from_pretrained(NER_MODEL_PATH,
+                                                                local_files_only = True)
+    class_tokenizer = AutoTokenizer.from_pretrained(CLASSIFICATION_MODEL_PATH,
+                                                    local_files_only = True)
+    class_model = AutoModelForSequenceClassification.from_pretrained(CLASSIFICATION_MODEL_PATH,
+                            local_files_only = True)
+
+    ner_pipeline = pipeline("token-classification", 
+                            model= ner_model,
+                            tokenizer=ner_tokenizer,
+                            aggregation_strategy="simple",
+                            device=0 if torch.cuda.is_available() else  -1)    
+    class_pipeline  = pipeline("text-classification",
+                               tokenizer=class_tokenizer,
+                               model=class_model,
+                               return_all_scores = False,
+                               device=0 if torch.cuda.is_available() else  -1)   
+     
+    print("Pipelines loaded successfully.")
 except Exception as e:
-    print(f"Помилка при завантаженні моделі: {e}")
-    print("Переконайтеся, що шлях до моделі правильний і модель була збережена коректно.")
-# --- 2. Ініціалізація FastAPI додатку ---
+    print(f"Помилка при завантаженні  моделі: {e}")
+    print("Переконайтеся, що шлях до  моделі правильний і модель була збережена коректно.")
+
+
+
+
+#-- 2. Ініціалізація FastAPI додатку ---
 app = FastAPI(
     docs_url=None,
     redoc_url= None,
@@ -25,12 +51,17 @@ app = FastAPI(
     description="API для розпізнавання іменованих сутностей (NER) за допомогою тонко налаштованої моделі.",
     version="1.0.0",
 )
-app.mount("/static/", StaticFiles(directory="app/static/swagger-ui"), name="static_swagger_ui_files")
+app.mount("/static/swagger-ui", StaticFiles(directory="app/static/swagger-ui/"), name="static-swagger-ui")
 
-# --- 4. Функція для передбачення NER ---
+def binary_weapon_classification(input_data: TextInput)->Dict[str, Union[str:float]]:
+    class_result = class_pipeline(input_data.text)[0]
+    return {"text": input_data.text, "score": class_result["score"]}
+
+
 def predict_ner(text: str)->List[Dict]:
     result = ner_pipeline(text)
     return result
+
 
 # --- 5. Визначення ендпоінту API ---
 @app.post("/ner/", response_model=NEROutput, summary="Розпізнавання іменованих сутностей")
@@ -38,17 +69,22 @@ async def get_ner_entities(input_data: TextInput) ->NEROutput:
     """
     Розпізнає іменовані сутності (NER) у наданому тексті.
     """
-    data = predict_ner(input_data.text)
-    return NEROutput(entities=data)
-
+    clasified= binary_weapon_classification(input_data)
+    if clasified["score"]> 0.5:
+        data = predict_ner(input_data.text)
+        return NEROutput(entities=data)
+    else: 
+        return NEROutput(entities=[])
 
 @app.get("/docs", response_class=HTMLResponse)
 async def serve_local_files_ui():
-    index_html_path = "app/static/swagger-ui/index.html"
-    try: 
-        with open(index_html_path, "r", encoding='utf-8') as f:
-            html_content= f.read()
-            return HTMLResponse(content=html_content)
-    except FileNotFoundError:
-        return HTMLResponse(content="<h1> Swagger UI file index.html not found!</h1>", status_code= 404)
+    return get_swagger_ui_html(openapi_url=app.openapi_url,
+                               title=app.title+ "Swagger UI", 
+                               swagger_css_url="/static/swagger-ui/swagger-ui.css",
+                               swagger_js_url="/static/swagger-ui/swagger-ui-bundle.js",
+                               swagger_favicon_url="/static/swagger-ui/favicon-32x32.png"
+                               )
     
+
+if __name__ == '__main__':
+    uvicorn.run(app, host="127.0.0.1", port=8000)
