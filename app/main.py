@@ -22,18 +22,23 @@ try:
     class_tokenizer = AutoTokenizer.from_pretrained(CLASSIFICATION_MODEL_PATH,
                                                     local_files_only = True)
     class_model = AutoModelForSequenceClassification.from_pretrained(CLASSIFICATION_MODEL_PATH,
-                            local_files_only = True)
+                            local_files_only = True, num_labels = 1)
 
     ner_pipeline = pipeline("token-classification", 
                             model= ner_model,
                             tokenizer=ner_tokenizer,
                             aggregation_strategy="simple",
-                            device=0 if torch.cuda.is_available() else  -1)    
+                            device=0 if torch.cuda.is_available() else  -1,
+                            truncation = True,
+                            max_size = 512)    
     class_pipeline  = pipeline("text-classification",
                                tokenizer=class_tokenizer,
                                model=class_model,
                                return_all_scores = False,
-                               device=0 if torch.cuda.is_available() else  -1)   
+                               device=0 if torch.cuda.is_available() else  -1, 
+                               truncation = True, 
+                               max_length = 512)   
+    
      
     print("Pipelines loaded successfully.")
 except Exception as e:
