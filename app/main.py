@@ -1,28 +1,35 @@
 from fastapi import FastAPI
-from transformers import AutoTokenizer, AutoModelForTokenClassification, AutoModelForSequenceClassification
-from typing import List, Dict, Union
-
-from transformers.pipelines import pipeline
-import torch
-from .py_models.models import  TextInput, Entity, NEROutput
-import uvicorn
-from starlette.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.openapi.docs import get_swagger_ui_html
+from starlette.staticfiles import StaticFiles
 
-NER_MODEL_PATH = "app/ner_model/" 
+from transformers import (AutoTokenizer,
+                          AutoModelForTokenClassification,
+                          AutoModelForSequenceClassification)
+from transformers.pipelines import pipeline
+
+import torch
+
+from typing import List, Dict, Union
+
+from .py_models.models import TextInput, NEROutput
+
+import uvicorn
+
+NER_MODEL_PATH = "app/ner_model/"
 CLASSIFICATION_MODEL_PATH = "app/classification_model/"
 
 
 try:
     ner_tokenizer = AutoTokenizer.from_pretrained(NER_MODEL_PATH,
-                                                  local_files_only = True)
+                                                  local_files_only=True)
     ner_model = AutoModelForTokenClassification.from_pretrained(NER_MODEL_PATH,
-                                                                local_files_only = True)
+                                                                local_files_only=
+                                                                True)
     class_tokenizer = AutoTokenizer.from_pretrained(CLASSIFICATION_MODEL_PATH,
-                                                    local_files_only = True)
+                                                     local_files_only=True)
     class_model = AutoModelForSequenceClassification.from_pretrained(CLASSIFICATION_MODEL_PATH,
-                            local_files_only = True, num_labels = 1)
+                            local_files_only=True, num_labels=1)
 
     ner_pipeline = pipeline("token-classification", 
                             model= ner_model,

@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 torch
-transformers
+transformers[cuda]>=4.5
 pydantic
 huggingface-hub
 tokenizers
