@@ -5,7 +5,8 @@ from starlette.staticfiles import StaticFiles
 
 from transformers import (AutoTokenizer,
                           AutoModelForTokenClassification,
-                          AutoModelForSequenceClassification)
+                          AutoModelForSequenceClassification
+                          )
 from transformers.pipelines import pipeline
 
 import torch
@@ -24,8 +25,7 @@ try:
     ner_tokenizer = AutoTokenizer.from_pretrained(NER_MODEL_PATH,
                                                   local_files_only=True)
     ner_model = AutoModelForTokenClassification.from_pretrained(NER_MODEL_PATH,
-                                                                local_files_only=
-                                                                True)
+                                                                local_files_only=True)
     class_tokenizer = AutoTokenizer.from_pretrained(CLASSIFICATION_MODEL_PATH,
                                                      local_files_only=True)
     class_model = AutoModelForSequenceClassification.from_pretrained(CLASSIFICATION_MODEL_PATH,
@@ -35,18 +35,9 @@ try:
                             model= ner_model,
                             tokenizer=ner_tokenizer,
                             aggregation_strategy="simple",
-                            device=0 if torch.cuda.is_available() else  -1,
-                            truncation = True,
-                            max_size = 512)    
-    class_pipeline  = pipeline("text-classification",
-                               tokenizer=class_tokenizer,
-                               model=class_model,
-                               return_all_scores = False,
-                               device=0 if torch.cuda.is_available() else  -1, 
-                               truncation = True, 
-                               max_length = 512)   
-    
-     
+                            device=0 if torch.cuda.is_available() else  -1)    
+    classification_pipeline = pipeline("text-classification",tokenizer=class_tokenizer, model=class_model,return_all_scores = False,
+                               device=0 if torch.cuda.is_available() else  -1, truncation = True)   
     print("Pipelines loaded successfully.")
 except Exception as e:
     print(f"Помилка при завантаженні  моделі: {e}")
@@ -63,11 +54,11 @@ app = FastAPI(
     description="API для розпізнавання іменованих сутностей (NER) за допомогою тонко налаштованої моделі.",
     version="1.0.0",
 )
-app.mount("/static/swagger-ui", StaticFiles(directory="app/static/swagger-ui/"), name="static-swagger-ui")
+app.mount("/app/static/swagger-ui", StaticFiles(directory="app/static/swagger-ui/"), name="static-swagger-ui")
 
-def binary_weapon_classification(input_data: TextInput)->Dict[str, Union[str:float]]:
-    class_result = class_pipeline(input_data.text)[0]
-    return {"text": input_data.text, "score": class_result["score"]}
+def binary_weapon_classification(input_data: TextInput)->float:
+    class_result = classification_pipeline(input_data.text)
+    return class_result[0]['score']
 
 
 def predict_ner(text: str)->List[Dict]:
@@ -82,7 +73,7 @@ async def get_ner_entities(input_data: TextInput) ->NEROutput:
     Розпізнає іменовані сутності (NER) у наданому тексті.
     """
     clasified= binary_weapon_classification(input_data)
-    if clasified["score"]> 0.5:
+    if clasified > 0.5:
         data = predict_ner(input_data.text)
         return NEROutput(entities=data)
     else: 
@@ -92,9 +83,9 @@ async def get_ner_entities(input_data: TextInput) ->NEROutput:
 async def serve_local_files_ui():
     return get_swagger_ui_html(openapi_url=app.openapi_url,
                                title=app.title+ "Swagger UI", 
-                               swagger_css_url="/static/swagger-ui/swagger-ui.css",
-                               swagger_js_url="/static/swagger-ui/swagger-ui-bundle.js",
-                               swagger_favicon_url="/static/swagger-ui/favicon-32x32.png"
+                               swagger_css_url="app/static/swagger-ui/swagger-ui.css",
+                               swagger_js_url="app/static/swagger-ui/swagger-ui-bundle.js",
+                               swagger_favicon_url="app/static/swagger-ui/favicon-32x32.png"
                                )
     
 
