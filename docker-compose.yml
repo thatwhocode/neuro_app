@@ -3,7 +3,7 @@ version: '3.8'
 services:
   ner_api:
     image: stasdevgunp/neuro_test:latest
-    container_name : ne_api_conrtainer
+    container_name : ner_api_conrtainer
     restart: always
     volumes: 
     - ./app/data:/app/data
@@ -17,7 +17,7 @@ services:
     ports: 
       - "443:443"
     volumes:
-      - ./nginx/nginx.conf:etc/nginx/nginx.conf:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
     depends_on:
       - ner_api
