@@ -5,7 +5,8 @@ services:
     image: stasdevgunp/neuro_test:latest
     container_name : ne_api_conrtainer
     restart: always
-    volumes: ./app/data:/app/data
+    volumes: 
+    - ./app/data:/app/data
     expose:
       - '8000'
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
