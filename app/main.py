@@ -11,7 +11,7 @@ from transformers.pipelines import pipeline
 
 import torch
 
-from typing import List, Dict, Union
+from typing import List, Dict
 
 from .py_models.models import TextInput, NEROutput
 
@@ -90,4 +90,4 @@ async def serve_local_files_ui():
     
 
 if __name__ == '__main__':
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000, ssl_keyfile="ssl/key.pem", ssl_certfile="ssl/cert.pem")
